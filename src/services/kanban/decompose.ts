@@ -38,7 +38,7 @@ export const REPAIR_INSTRUCTION =
 export function stripFences(raw: string): string {
   const trimmed = raw.trim();
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return (fenced ? fenced[1] : trimmed).trim();
+  return (fenced?.[1] ?? trimmed).trim();
 }
 
 /**
@@ -56,7 +56,7 @@ export function parseProposal(raw: string): DecomposeProposal {
     throw new ApiError(502, "LLM_INVALID_OUTPUT", "The model did not return an object.");
 
   const obj = data as Record<string, unknown>;
-  const rawSubtasks = obj.subtasks;
+  const rawSubtasks = obj['subtasks'];
   if (!Array.isArray(rawSubtasks))
     throw new ApiError(502, "LLM_INVALID_OUTPUT", "Missing subtasks list.");
 
@@ -80,11 +80,11 @@ export function parseProposal(raw: string): DecomposeProposal {
       "The model returned the wrong number of subtasks.",
     );
 
-  const priority = obj.suggested_priority;
+  const priority = obj['suggested_priority'];
   if (typeof priority !== "string" || !PRIORITIES.includes(priority as Priority))
     throw new ApiError(502, "LLM_INVALID_OUTPUT", "The suggested priority was invalid.");
 
-  const rationale = typeof obj.rationale === "string" ? obj.rationale.trim() : "";
+  const rationale = typeof obj['rationale'] === "string" ? obj['rationale'].trim() : "";
   if (!rationale || rationale.length > 240)
     throw new ApiError(502, "LLM_INVALID_OUTPUT", "The rationale was empty or too long.");
 
