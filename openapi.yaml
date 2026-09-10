@@ -1,0 +1,744 @@
+openapi: 3.0.3
+info:
+  title: Mini Kanban Board API
+  version: 1.0.0
+  description: |
+    Backend contract expected by `frontend/src/services/kanban/http-service.ts`
+    (single services layer; `KanbanService` interface in `types.ts`).
+
+    Base URL configured via `VITE_KANBAN_API_URL` (e.g. `http://localhost:8000/api`).
+    All request/response bodies are JSON. All IDs are UUID strings.
+
+    ## Authentication: none
+
+    No endpoint requires authentication. The spec explicitly excludes user
+    accounts, login, JWT, sessions, and per-user API keys (v1 non-goal #1).
+    The frontend sends only `Content-Type: application/json` and never an
+    `Authorization` header. There are no `securitySchemes`; every operation
+    lists `security: []`.
+servers:
+  - url: http://localhost:8000
+    description: Local FastAPI backend (CORS allows http://localhost:5173)
+
+tags:
+  - name: system
+  - name: boards
+  - name: cards
+  - name: subtasks
+  - name: ai
+
+paths:
+  /api/health:
+    get:
+      tags: [system]
+      summary: Liveness probe
+      operationId: health
+      security: []
+      responses:
+        '200':
+          description: Backend is up
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/boards:
+    get:
+      tags: [boards]
+      summary: List all boards
+      operationId: listBoards
+      security: []
+      responses:
+        '200':
+          description: Every board with card counts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BoardSummary'
+    post:
+      tags: [boards]
+      summary: Create a board and seed its 3 columns
+      operationId: createBoard
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBoardRequest'
+      responses:
+        '201':
+          description: Board tree with seeded To Do / In Progress / Done columns
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardTree'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/boards/{board_id}:
+    parameters:
+      - $ref: '#/components/parameters/BoardId'
+    get:
+      tags: [boards]
+      summary: Full board tree (columns -> cards -> subtasks)
+      operationId: getBoard
+      security: []
+      responses:
+        '200':
+          description: Board tree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardTree'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [boards]
+      summary: Rename a board
+      operationId: renameBoard
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenameBoardRequest'
+      responses:
+        '200':
+          description: Renamed board tree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardTree'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [boards]
+      summary: Delete a board and all descendants
+      operationId: deleteBoard
+      security: []
+      responses:
+        '204':
+          description: Deleted (hard delete, cascades to columns, cards, subtasks)
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/columns/{column_id}/cards:
+    parameters:
+      - $ref: '#/components/parameters/ColumnId'
+    post:
+      tags: [cards]
+      summary: Create a card appended to the end of a column
+      operationId: createCard
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCardRequest'
+      responses:
+        '201':
+          description: Created card
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Card'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/cards/{card_id}:
+    parameters:
+      - $ref: '#/components/parameters/CardId'
+    patch:
+      tags: [cards]
+      summary: Update card title, description, and/or priority
+      operationId: updateCard
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCardRequest'
+      responses:
+        '200':
+          description: Updated card
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Card'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [cards]
+      summary: Delete a card and its subtasks
+      operationId: deleteCard
+      security: []
+      responses:
+        '204':
+          description: Deleted (hard delete, cascades to subtasks, renumbers column)
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/cards/{card_id}/move:
+    parameters:
+      - $ref: '#/components/parameters/CardId'
+    post:
+      tags: [cards]
+      summary: Move a card within or between columns of the same board
+      operationId: moveCard
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveCardRequest'
+      responses:
+        '200':
+          description: Updated board tree (client re-reads the tree after mutation)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardTree'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Cross-board move rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogicError'
+              example:
+                detail:
+                  code: CROSS_BOARD_MOVE
+                  message: A card can only move between columns of the same board.
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/cards/{card_id}/ai/decompose:
+    parameters:
+      - $ref: '#/components/parameters/CardId'
+    post:
+      tags: [ai]
+      summary: Read-only AI decomposition proposal (no database write, ever)
+      operationId: decomposeCard
+      security: []
+      description: |
+        Loads the card, builds the prompt from title + description + existing
+        subtask titles, calls the LLM provider with a timeout, validates the
+        output (3-6 subtasks, valid priority, rationale), retrying once with a
+        repair instruction. Returns the proposal for the Human-in-the-Loop
+        preview modal. The frontend commits via POST
+        /api/cards/{card_id}/subtasks only after the user clicks Apply.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Empty body; the frontend posts `{}`.
+              maxProperties: 0
+      responses:
+        '200':
+          description: Ephemeral proposal (not persisted)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecomposeResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: Empty card title (VALIDATION_ERROR) or FastAPI validation failure
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/LogicError'
+                  - $ref: '#/components/schemas/HTTPValidationError'
+        '502':
+          description: Upstream error or invalid model output after retries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogicError'
+              examples:
+                upstream:
+                  value:
+                    detail:
+                      code: LLM_UPSTREAM_ERROR
+                      message: The LLM provider returned an error.
+                invalid:
+                  value:
+                    detail:
+                      code: LLM_INVALID_OUTPUT
+                      message: The assistant returned an unusable answer.
+        '503':
+          description: Groq selected but GROQ_API_KEY empty
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogicError'
+              example:
+                detail:
+                  code: LLM_NOT_CONFIGURED
+                  message: The assistant is not configured yet.
+        '504':
+          description: Provider timeout or network error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogicError'
+              example:
+                detail:
+                  code: LLM_UNAVAILABLE
+                  message: The assistant could not be reached.
+
+  /api/cards/{card_id}/subtasks:
+    parameters:
+      - $ref: '#/components/parameters/CardId'
+    post:
+      tags: [subtasks]
+      summary: Bulk-create subtasks (manual add or AI proposal accept)
+      operationId: bulkCreateSubtasks
+      security: []
+      description: |
+        Appends subtasks after existing ones in array order. `origin` defaults
+        to USER; accept flow sends `origin: "AI"`. Optional `priority` updates
+        the parent card.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkCreateSubtasksRequest'
+      responses:
+        '201':
+          description: Created subtasks in order
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Subtask'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/subtasks/{subtask_id}:
+    parameters:
+      - $ref: '#/components/parameters/SubtaskId'
+    patch:
+      tags: [subtasks]
+      summary: Update subtask title and/or completion
+      operationId: updateSubtask
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSubtaskRequest'
+      responses:
+        '200':
+          description: Updated subtask
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subtask'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [subtasks]
+      summary: Delete a subtask (renumbers remaining)
+      operationId: deleteSubtask
+      security: []
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes: {}
+
+  parameters:
+    BoardId:
+      name: board_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Board UUID (String(36)).
+    ColumnId:
+      name: column_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Column UUID (String(36)).
+    CardId:
+      name: card_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Card UUID (String(36)).
+    SubtaskId:
+      name: subtask_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Subtask UUID (String(36)).
+
+  responses:
+    NotFound:
+      description: Path ID does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LogicError'
+          example:
+            detail:
+              code: NOT_FOUND
+              message: That board was not found.
+    ValidationError:
+      description: Validation failure (422). App logic uses LogicError; FastAPI request parsing uses HTTPValidationError.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/LogicError'
+              - $ref: '#/components/schemas/HTTPValidationError'
+
+  schemas:
+    Priority:
+      type: string
+      enum: [LOW, MEDIUM, HIGH]
+      example: MEDIUM
+    SubtaskOrigin:
+      type: string
+      enum: [USER, AI]
+      example: USER
+
+    HealthResponse:
+      type: object
+      required: [status, llm_provider]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        llm_provider:
+          type: string
+          description: Active provider name, e.g. groq or mock.
+          example: groq
+
+    BoardSummary:
+      type: object
+      required: [id, name, created_at, card_count]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 120
+        created_at:
+          type: string
+          format: date-time
+        card_count:
+          type: integer
+          minimum: 0
+
+    BoardTree:
+      type: object
+      required: [id, name, created_at, columns]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 120
+        created_at:
+          type: string
+          format: date-time
+        columns:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/Column'
+
+    Column:
+      type: object
+      required: [id, board_id, name, position, cards]
+      properties:
+        id:
+          type: string
+          format: uuid
+        board_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 60
+          example: To Do
+        position:
+          type: integer
+          minimum: 0
+          maximum: 2
+        cards:
+          type: array
+          items:
+            $ref: '#/components/schemas/Card'
+
+    Card:
+      type: object
+      required: [id, column_id, title, description, priority, position, created_at, updated_at, subtasks]
+      properties:
+        id:
+          type: string
+          format: uuid
+        column_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+          nullable: true
+        priority:
+          $ref: '#/components/schemas/Priority'
+        position:
+          type: integer
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        subtasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Subtask'
+
+    Subtask:
+      type: object
+      required: [id, card_id, title, is_done, position, created_at, origin]
+      properties:
+        id:
+          type: string
+          format: uuid
+        card_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          maxLength: 200
+        is_done:
+          type: boolean
+          default: false
+        position:
+          type: integer
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+        origin:
+          $ref: '#/components/schemas/SubtaskOrigin'
+
+    CreateBoardRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Non-empty after strip.
+          example: Launch MVP
+
+    RenameBoardRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Non-empty after strip.
+
+    CreateCardRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Non-empty after strip.
+        description:
+          type: string
+          nullable: true
+          description: Blank is stored as null.
+        priority:
+          $ref: '#/components/schemas/Priority'
+          default: MEDIUM
+
+    UpdateCardRequest:
+      type: object
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Non-empty after strip.
+        description:
+          type: string
+          nullable: true
+          description: Blank is stored as null.
+        priority:
+          $ref: '#/components/schemas/Priority'
+
+    MoveCardRequest:
+      type: object
+      required: [target_column_id, target_position]
+      properties:
+        target_column_id:
+          type: string
+          format: uuid
+          description: Must belong to the same board; otherwise 409 CROSS_BOARD_MOVE.
+        target_position:
+          type: integer
+          minimum: 0
+          description: Clamped server-side to [0, len(target column cards)].
+
+    SubtaskTitle:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Non-empty after strip.
+
+    BulkCreateSubtasksRequest:
+      type: object
+      required: [subtasks]
+      properties:
+        subtasks:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/SubtaskTitle'
+        origin:
+          $ref: '#/components/schemas/SubtaskOrigin'
+          default: USER
+        priority:
+          $ref: '#/components/schemas/Priority'
+          description: When present, updates the parent card's priority.
+
+    UpdateSubtaskRequest:
+      type: object
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Non-empty after strip.
+        is_done:
+          type: boolean
+
+    DecomposeProposal:
+      type: object
+      required: [subtasks, suggested_priority, rationale]
+      properties:
+        subtasks:
+          type: array
+          minItems: 3
+          maxItems: 6
+          items:
+            type: string
+            minLength: 1
+            maxLength: 120
+          description: Unique case-insensitively; bounds enforced, never truncated.
+        suggested_priority:
+          $ref: '#/components/schemas/Priority'
+        rationale:
+          type: string
+          minLength: 1
+          maxLength: 240
+
+    DecomposeResponse:
+      type: object
+      required: [card_id, proposal, model, provider]
+      properties:
+        card_id:
+          type: string
+          format: uuid
+        proposal:
+          $ref: '#/components/schemas/DecomposeProposal'
+        model:
+          type: string
+          example: openai/gpt-oss-20b
+        provider:
+          type: string
+          example: groq
+
+    LogicError:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [NOT_FOUND, VALIDATION_ERROR, CROSS_BOARD_MOVE, LLM_NOT_CONFIGURED, LLM_UNAVAILABLE, LLM_UPSTREAM_ERROR, LLM_INVALID_OUTPUT]
+            message:
+              type: string
+      description: Application-logic error envelope used for 404/409/422(app)/502/503/504.
+
+    HTTPValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  type: string
+              msg:
+                type: string
+              type:
+                type: string
+      description: FastAPI default 422 shape for request parsing failures.
