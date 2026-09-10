@@ -114,7 +114,7 @@ function ColumnPanel({
   boardId: string;
   isFirst: boolean;
   isLast: boolean;
-  neighbours: { prev?: string; next?: string };
+  neighbours: { prev?: string | undefined; next?: string | undefined };
   onOpenCard: (cardId: string) => void;
   onMove: (cardId: string, targetColumnId: string, targetPosition: number) => void;
   onDelete: (cardId: string) => void;
